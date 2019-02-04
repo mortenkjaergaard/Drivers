@@ -13,6 +13,7 @@
 import numpy as np
 from numpy.fft import fft, fftfreq, fftshift, ifft, ifftshift
 from scipy.interpolate import interp1d
+import csv
 
 
 class Predistortion(object):
@@ -162,16 +163,12 @@ class ExponentialPredistortion:
     """
 
     def __init__(self, waveform_number):
-        self.A1 = 0
-        self.tau1 = 0
-        self.A2 = 0
-        self.tau2 = 0
-        self.A3 = 0
-        self.tau3 = 0
-        self.A4 = 0
-        self.tau4 = 0
+        self.A = []
+        self.tau = []
         self.dt = 1
         self.n = int(waveform_number)
+        self.predistortPath = ''
+        self.nPoles = 0
 
     def set_parameters(self, config={}):
         """Set base parameters using config from from Labber driver.
@@ -183,15 +180,22 @@ class ExponentialPredistortion:
 
         """
         m = self.n + 1
-        self.A1 = config.get('Predistort Z{} - A1'.format(m))
-        self.tau1 = config.get('Predistort Z{} - tau1'.format(m))
-        self.A2 = config.get('Predistort Z{} - A2'.format(m))
-        self.tau2 = config.get('Predistort Z{} - tau2'.format(m))
+        self.predistortPath = config.get('Predistort Z%d path' % m)
 
-        self.A3 = config.get('Predistort Z{} - A3'.format(m))
-        self.tau3 = config.get('Predistort Z{} - tau3'.format(m))
-        self.A4 = config.get('Predistort Z{} - A4'.format(m))
-        self.tau4 = config.get('Predistort Z{} - tau4'.format(m))
+        with open(self.predistortPath) as csv_file:
+            csv_reader = csv.reader(csv_file, delimiter=',')
+            for row in csv_reader:
+                # check if convertible to float - first row may be headers
+                try:
+                    self.A.append(float(row[0]))
+                    self.tau.append(float(row[1]))
+                except ValueError:
+                    continue
+        # sanity check
+        if len(self.A) is not len(self.tau):
+            raise('Error in parsing predistortion file: unequal number of \
+                  A and tau entries')
+        self.nPoles = len(self.A)
 
         self.dt = 1 / config.get('Sample rate')
 
@@ -210,22 +214,17 @@ class ExponentialPredistortion:
 
         """
         # pad with zeros at end to make sure response has time to go to zero
-        pad_time = 6 * max([self.tau1, self.tau2, self.tau3])
+        pad_time = 6 * max(self.tau)
         padded = np.zeros(len(waveform) + round(pad_time / self.dt))
         padded[:len(waveform)] = waveform
 
         Y = np.fft.rfft(padded, norm='ortho')
 
         omega = 2 * np.pi * np.fft.rfftfreq(len(padded), self.dt)
-        H = (1 +
-             (1j * self.A1 * omega * self.tau1) /
-             (1j * omega * self.tau1 + 1) +
-             (1j * self.A2 * omega * self.tau2) /
-             (1j * omega * self.tau2 + 1) +
-             (1j * self.A3 * omega * self.tau3) /
-             (1j * omega * self.tau3 + 1) +
-             (1j * self.A4 * omega * self.tau4) /
-             (1j * omega * self.tau4 + 1))
+
+        H = 1
+        for (A, tau) in zip(self.A, self.tau):
+            H += (1j * A * omega * tau) / (1j * omega * tau + 1)
 
         Yc = Y / H
 
