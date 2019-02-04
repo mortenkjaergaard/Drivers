@@ -182,15 +182,20 @@ class ExponentialPredistortion:
         m = self.n + 1
         self.predistortPath = config.get('Predistort Z%d path' % m)
 
-        with open(self.predistortPath) as csv_file:
-            csv_reader = csv.reader(csv_file, delimiter=',')
-            for row in csv_reader:
-                # check if convertible to float - first row may be headers
-                try:
-                    self.A.append(float(row[0]))
-                    self.tau.append(float(row[1]))
-                except ValueError:
-                    continue
+        try:  # try statement catches if file not found
+            with open(self.predistortPath) as csv_file:
+                # check if file exists
+                csv_reader = csv.reader(csv_file, delimiter=',')
+                for row in csv_reader:
+                    # check if convertible to float - first row may be headers
+                    try:
+                        self.A.append(float(row[0]))
+                        self.tau.append(float(row[1]))
+                    except ValueError:
+                        continue
+        except (FileNotFoundError, IOError) as e:
+            pass
+
         # sanity check
         if len(self.A) is not len(self.tau):
             raise('Error in parsing predistortion file: unequal number of \
@@ -214,7 +219,7 @@ class ExponentialPredistortion:
 
         """
         # pad with zeros at end to make sure response has time to go to zero
-        pad_time = 6 * max(self.tau)
+        pad_time = 6 * max(self.tau) if len(self.tau) > 0 else 0
         padded = np.zeros(len(waveform) + round(pad_time / self.dt))
         padded[:len(waveform)] = waveform
 
