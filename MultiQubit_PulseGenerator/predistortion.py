@@ -182,6 +182,12 @@ class ExponentialPredistortion:
         m = self.n + 1
         self.predistortPath = config.get('Predistort Z%d path' % m)
 
+        # Note this is inefficient and requires rereading the predistortion everytime
+        # set_parameters is called!
+
+        self.A = []
+        self.tau = []
+
         try:  # try statement catches if file not found
             with open(self.predistortPath) as csv_file:
                 # check if file exists
@@ -198,8 +204,9 @@ class ExponentialPredistortion:
 
         # sanity check
         if len(self.A) is not len(self.tau):
-            raise('Error in parsing predistortion file: unequal number of \
-                  A and tau entries')
+            raise Exception('Error in parsing predistortion file: \
+                unequal number of A and tau entries. len(A) = %d, \
+                len(t) = %d' % (len(self.A), len(self.tau)))
         self.nPoles = len(self.A)
 
         self.dt = 1 / config.get('Sample rate')
