@@ -29,6 +29,7 @@ class Driver(LabberDriver):
         self._node_datatypes = dict()
         self.n_ch = 8
         self.waveform_updated = [False] * self.n_ch
+        self.buffer_sizes = [0] * 4
         self.log('Connected', self.device)
 
     def performClose(self, bError=False, options={}):
@@ -138,6 +139,8 @@ class Driver(LabberDriver):
         channels = ', '.join(x)
         self.log(channels)
 
+        # check version of API
+        new_style = hasattr(self.daq, 'setVector')
         # proceed depending on run mode
         run_mode = self.getValue('Run mode, group %d' % group)
         # in internal trigger mode, make buffer as long as trig interval
@@ -145,22 +148,40 @@ class Driver(LabberDriver):
             trig_period = self.getValue('Trig period, group %d' % group)
             sampling_rate = 2.4E9 / (
                 2 ** self.getValueIndex('Sampling rate, group %d' % group))
-            buffer_size = int(round(trig_period * sampling_rate))
+            # timing changed for new API version
+            if new_style:
+                # new style - large delays
+                buffer_size = int(round((trig_period - 30E-9 - 3.9E-6) * sampling_rate))
+                # wait time is in units of 10/3 ns
+                wait_time = int(round(3 * (30E-9 / 10E-9)))
+                # remove a few clock cycles to account for while/wait time
+                wait_time -= 7
+                awg_program += textwrap.dedent("""\
+                    setUserReg(0, 0);
+                    while(true){
+                        while(getUserReg(0) == 0){
+                            playWave(%s);
+                            waitWave();
+                            wait(%d);
+                        }
+                    }""") % (channels, wait_time)
+            else:
+                buffer_size = int(round(trig_period * sampling_rate))
+                # wait time is in units of 10/3 ns
+                wait_time = int(round(3 * (trig_period / 10E-9)))
+                # remove a few clock cycles to account for while/wait time
+                wait_time -= 7
+                awg_program += textwrap.dedent("""\
+                    setUserReg(0, 0);
+                    while(true){
+                        while(getUserReg(0) == 0){
+                            playWave(%s);
+                            wait(%d);
+                        }
+                    }""") % (channels, wait_time)
+
             # limit to max memory of unit
             buffer_size = min(buffer_size, 64E6)
-            # wait time is in units of 10/3 ns
-            wait_time = int(round(3 * (trig_period / 10E-9)))
-            # remove a few clock cycles to account for while/wait time
-            wait_time -= 7
-
-            awg_program += textwrap.dedent("""\
-                setUserReg(0, 0);
-                while(true){
-                    while(getUserReg(0) == 0){
-                        playWave(%s);
-                        wait(%d);
-                    }
-                }""") % (channels, wait_time)
             awg_program = awg_program.replace('_n_', ('%d' % buffer_size))
 
         elif run_mode == 'External trigger':
@@ -184,6 +205,8 @@ class Driver(LabberDriver):
 
             awg_program = awg_program.replace('_n_', ('%d' % buffer_size))
 
+        # keep track of buffer size
+        self.buffer_sizes[group - 1] = buffer_size
         # stop current AWG
         base = '/%s/awgs/0/' % self.device
         self.daq.setInt(base + 'enable', 0)
@@ -205,9 +228,12 @@ class Driver(LabberDriver):
 
     def _upload_waveforms(self, awg_updated=None):
         """Upload all waveforms to device"""
+        # check version of API
+        new_style = hasattr(self.daq, 'setVector')
+        # get updated channels
         if awg_updated is None:
             awg_updated = [True] * self.n_ch
-        #
+
         # upload waveforms pairwise
         for ch in range(0, self.n_ch, 2):
             # upload if one or both waveforms are updated
@@ -215,27 +241,40 @@ class Driver(LabberDriver):
                 # get waveform data
                 if self.awg_in_use[ch]:
                     x1 = self.getValueArray('AWG%d - Waveform' % (ch + 1))
-                    # x1 = np.sin(np.linspace(0, (ch + 1) * 2 * np.pi, 1200))
                 else:
                     # upload a small empty waveform
                     x1 = np.zeros(100)
                 if self.awg_in_use[ch + 1]:
                     x2 = self.getValueArray('AWG%d - Waveform' % (ch + 2))
-                    # x2 = np.sin(np.linspace(0, (ch + 2) * 2 * np.pi, 1200))
                 else:
                     # upload a small empty waveform
                     x2 = np.zeros(100)
+
                 # upload interleaved data
                 (core, ch_core) = divmod(ch, 2)
-                n = max(len(x1), len(x2))
+                if new_style:
+                    # in the new style, waveform must match buffer size
+                    n = self.buffer_sizes[0]
+                else:
+                    n = max(len(x1), len(x2))
                 data = np.zeros((n, 2))
                 data[:len(x1), 0] = x1
                 data[:len(x2), 1] = x2
-
                 base = '/%s/awgs/%d/' % (self.device, core)
-                self.daq.setInt(base + 'waveform/index', 0)
-                self.daq.sync()
-                self.daq.vectorWrite(base + 'waveform/data', data.flatten())
+
+                # check old or new-style uploads
+                if new_style:
+                    # new-style call
+                    data_zh = zhinst.utils.convert_awg_waveform(data.flatten())
+                    self.daq.setVector(
+                        base + 'waveform/waves/0', data_zh)
+                else:
+                    # old-style call
+                    self.daq.setInt(base + 'waveform/index', 0)
+                    self.daq.sync()
+                    self.daq.vectorWrite(
+                        base + 'waveform/data', data.flatten())
+
                 # set enabled
                 self.daq.setInt(base + 'enable', 1)
 
