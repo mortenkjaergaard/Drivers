@@ -265,13 +265,13 @@ class CZ(Pulse):
         # Clip theta_t to remove numerical outliers:
         theta_t = np.clip(theta_t, self.theta_i, None)
 
-        # From definitions: theta = arctan(2*coupling / f_absolute), we invert
-        # to find df (and subtract off the initial frequency)
-        df = 2 * self.Coupling * (1 / np.tan(theta_t)) - self.Offset
+        # clip theta_f to remove numerical outliers
+        theta_t = np.clip(theta_t, self.theta_i, None)
+        df = 2*self.Coupling * (1 / np.tan(theta_t) - 1 / np.tan(self.theta_i))
 
         if self.qubit is None:
             # Use linear dependence if no qubit was given
-            log.info('---> df (linear): ' +str(df))
+            # log.info('---> df (linear): ' +str(df))
             values = df / self.dfdV
             # values = theta_t
         else:
@@ -289,7 +289,7 @@ class CZ(Pulse):
         # Initial and final angles on the |11>-|02> bloch sphere
         self.theta_i = np.arctan(2*self.Coupling / self.Offset)
         self.theta_f = np.arctan(2*self.Coupling / self.amplitude)
-        log.log(msg="calc", level=30)
+        # log.log(msg="calc", level=30)
 
         # Renormalize fourier coefficients to initial and final angles
         # Consistent with both Martinis & Geller and DiCarlo 1903.02492
